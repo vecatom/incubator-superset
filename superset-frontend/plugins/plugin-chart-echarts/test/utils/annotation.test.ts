@@ -17,12 +17,14 @@
  * under the License.
  */
 import {
+  AnnotationData,
   AnnotationLayer,
   AnnotationOpacity,
-  AnnotationResult,
   AnnotationSourceType,
   AnnotationStyle,
   AnnotationType,
+  AxisType,
+  DataRecord,
   FormulaAnnotationLayer,
   TimeseriesDataRecord,
 } from '@superset-ui/core';
@@ -88,6 +90,7 @@ describe('extractAnnotationLabels', () => {
         show: true,
         style: AnnotationStyle.Solid,
         value: 'sin(x)',
+        showLabel: true,
       },
       {
         annotationType: AnnotationType.Formula,
@@ -95,6 +98,7 @@ describe('extractAnnotationLabels', () => {
         show: false,
         style: AnnotationStyle.Solid,
         value: 'sin(2x)',
+        showLabel: true,
       },
       {
         annotationType: AnnotationType.Interval,
@@ -103,6 +107,7 @@ describe('extractAnnotationLabels', () => {
         show: true,
         style: AnnotationStyle.Solid,
         value: 1,
+        showLabel: true,
       },
       {
         annotationType: AnnotationType.Timeseries,
@@ -111,6 +116,7 @@ describe('extractAnnotationLabels', () => {
         style: AnnotationStyle.Dashed,
         sourceType: AnnotationSourceType.Line,
         value: 1,
+        showLabel: true,
       },
       {
         annotationType: AnnotationType.Timeseries,
@@ -119,9 +125,10 @@ describe('extractAnnotationLabels', () => {
         style: AnnotationStyle.Dashed,
         sourceType: AnnotationSourceType.Line,
         value: 1,
+        showLabel: true,
       },
     ];
-    const results: AnnotationResult = {
+    const results: AnnotationData = {
       'My Interval': {
         columns: ['col'],
         records: [{ col: 1 }],
@@ -147,6 +154,7 @@ describe('evalFormula', () => {
     show: true,
     style: AnnotationStyle.Solid,
     value: 'x+1',
+    showLabel: true,
   };
   it('Should evaluate a regular formula', () => {
     const data: TimeseriesDataRecord[] = [
@@ -154,9 +162,9 @@ describe('evalFormula', () => {
       { __timestamp: 10 },
     ];
 
-    expect(evalFormula(layer, data)).toEqual([
-      [new Date(0), 1],
-      [new Date(10), 11],
+    expect(evalFormula(layer, data, '__timestamp', AxisType.time)).toEqual([
+      [0, 1],
+      [10, 11],
     ]);
   });
 
@@ -166,9 +174,32 @@ describe('evalFormula', () => {
       { __timestamp: 10 },
     ];
 
-    expect(evalFormula({ ...layer, value: 'y  = x* 2   -1' }, data)).toEqual([
-      [new Date(0), -1],
-      [new Date(10), 19],
+    expect(
+      evalFormula(
+        { ...layer, value: 'y  = x* 2   -1' },
+        data,
+        '__timestamp',
+        AxisType.time,
+      ),
+    ).toEqual([
+      [0, -1],
+      [10, 19],
+    ]);
+  });
+
+  it('Should evaluate a formula if axis type is category', () => {
+    const data: DataRecord[] = [{ gender: 'boy' }, { gender: 'girl' }];
+
+    expect(
+      evalFormula(
+        { ...layer, value: 'y = 1000' },
+        data,
+        'gender',
+        AxisType.category,
+      ),
+    ).toEqual([
+      ['boy', 1000],
+      ['girl', 1000],
     ]);
   });
 });

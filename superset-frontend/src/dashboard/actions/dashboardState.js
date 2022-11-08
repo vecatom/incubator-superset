@@ -18,9 +18,18 @@
  */
 /* eslint camelcase: 0 */
 import { ActionCreators as UndoActionCreators } from 'redux-undo';
-import { ensureIsArray, t, SupersetClient } from '@superset-ui/core';
-import { addChart, removeChart, refreshChart } from 'src/chart/chartAction';
-import { chart as initChart } from 'src/chart/chartReducer';
+import {
+  ensureIsArray,
+  t,
+  SupersetClient,
+  getSharedLabelColor,
+} from '@superset-ui/core';
+import {
+  addChart,
+  removeChart,
+  refreshChart,
+} from 'src/components/Chart/chartAction';
+import { chart as initChart } from 'src/components/Chart/chartReducer';
 import { applyDefaultFormData } from 'src/explore/store';
 import { getClientErrorObject } from 'src/utils/getClientErrorObject';
 import { SAVE_TYPE_OVERWRITE } from 'src/dashboard/util/constants';
@@ -46,6 +55,7 @@ import {
   removeFilter,
   updateDirectPathToFilter,
 } from './dashboardFilters';
+import { SET_FILTER_CONFIG_COMPLETE } from './nativeFilters';
 
 export const SET_UNSAVED_CHANGES = 'SET_UNSAVED_CHANGES';
 export function setUnsavedChanges(hasUnsavedChanges) {
@@ -225,8 +235,10 @@ export function saveDashboardRequest(data, id, saveType) {
         ...data.metadata,
         color_namespace: data.metadata?.color_namespace || undefined,
         color_scheme: data.metadata?.color_scheme || '',
+        color_scheme_domain: data.metadata?.color_scheme_domain || [],
         expanded_slices: data.metadata?.expanded_slices || {},
         label_colors: data.metadata?.label_colors || {},
+        shared_label_colors: data.metadata?.shared_label_colors || {},
         refresh_frequency: data.metadata?.refresh_frequency || 0,
         timed_refresh_immune_slices:
           data.metadata?.timed_refresh_immune_slices || [],
@@ -272,7 +284,7 @@ export function saveDashboardRequest(data, id, saveType) {
     const onUpdateSuccess = response => {
       const updatedDashboard = response.json.result;
       const lastModifiedTime = response.json.last_modified_time;
-      // synching with the backend transformations of the metadata
+      // syncing with the backend transformations of the metadata
       if (updatedDashboard.json_metadata) {
         const metadata = JSON.parse(updatedDashboard.json_metadata);
         dispatch(
@@ -284,6 +296,12 @@ export function saveDashboardRequest(data, id, saveType) {
           dispatch({
             type: SET_CHART_CONFIG_COMPLETE,
             chartConfiguration: metadata.chart_configuration,
+          });
+        }
+        if (metadata.native_filter_configuration) {
+          dispatch({
+            type: SET_FILTER_CONFIG_COMPLETE,
+            filterConfig: metadata.native_filter_configuration,
           });
         }
       }
@@ -303,7 +321,7 @@ export function saveDashboardRequest(data, id, saveType) {
 
     const onError = async response => {
       const { error, message } = await getClientErrorObject(response);
-      let errorText = t('Sorry, an unknown error occured');
+      let errorText = t('Sorry, an unknown error occurred');
 
       if (error) {
         errorText = t(
@@ -411,6 +429,16 @@ const refreshCharts = (chartList, force, interval, dashboardId, dispatch) =>
     resolve();
   });
 
+export const ON_FILTERS_REFRESH = 'ON_FILTERS_REFRESH';
+export function onFiltersRefresh() {
+  return { type: ON_FILTERS_REFRESH };
+}
+
+export const ON_FILTERS_REFRESH_SUCCESS = 'ON_FILTERS_REFRESH_SUCCESS';
+export function onFiltersRefreshSuccess() {
+  return { type: ON_FILTERS_REFRESH_SUCCESS };
+}
+
 export const ON_REFRESH_SUCCESS = 'ON_REFRESH_SUCCESS';
 export function onRefreshSuccess() {
   return { type: ON_REFRESH_SUCCESS };
@@ -425,8 +453,11 @@ export function onRefresh(
 ) {
   return dispatch => {
     dispatch({ type: ON_REFRESH });
-    refreshCharts(chartList, force, interval, dashboardId, dispatch).then(() =>
-      dispatch({ type: ON_REFRESH_SUCCESS }),
+    refreshCharts(chartList, force, interval, dashboardId, dispatch).then(
+      () => {
+        dispatch(onRefreshSuccess());
+        dispatch(onFiltersRefresh());
+      },
     );
   };
 }
@@ -454,8 +485,7 @@ export function addSliceToDashboard(id, component) {
     const newChart = {
       ...initChart,
       id,
-      form_data,
-      formData: applyDefaultFormData(form_data),
+      form_data: applyDefaultFormData(form_data),
     };
 
     return Promise.all([
@@ -480,6 +510,7 @@ export function removeSliceFromDashboard(id) {
 
     dispatch(removeSlice(id));
     dispatch(removeChart(id));
+    getSharedLabelColor().removeSlice(id);
   };
 }
 
@@ -539,5 +570,13 @@ export function maxUndoHistoryToast() {
         `You have used all ${historyLength} undo slots and will not be able to fully undo subsequent actions. You may save your current state to reset the history.`,
       ),
     );
+  };
+}
+
+export const SET_DATASETS_STATUS = 'SET_DATASETS_STATUS';
+export function setDatasetsStatus(status) {
+  return {
+    type: SET_DATASETS_STATUS,
+    status,
   };
 }

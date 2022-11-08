@@ -20,10 +20,12 @@ import {
   SupersetClient,
   getTimeFormatter,
   TimeFormats,
+  ensureIsArray,
 } from '@superset-ui/core';
 
 // ATTENTION: If you change any constants, make sure to also change constants.py
 
+export const EMPTY_STRING = '<empty string>';
 export const NULL_STRING = '<NULL>';
 export const TRUE_STRING = 'TRUE';
 export const FALSE_STRING = 'FALSE';
@@ -33,17 +35,6 @@ export const SHORT_DATE = 'MMM D, YYYY';
 export const SHORT_TIME = 'h:m a';
 
 const DATETIME_FORMATTER = getTimeFormatter(TimeFormats.DATABASE_DATETIME);
-
-export function getParamFromQuery(query, param) {
-  const vars = query.split('&');
-  for (let i = 0; i < vars.length; i += 1) {
-    const pair = vars[i].split('=');
-    if (decodeURIComponent(pair[0]) === param) {
-      return decodeURIComponent(pair[1]);
-    }
-  }
-  return null;
-}
 
 export function storeQuery(query) {
   return SupersetClient.post({
@@ -61,13 +52,13 @@ export function optionLabel(opt) {
     return NULL_STRING;
   }
   if (opt === '') {
-    return '<empty string>';
+    return EMPTY_STRING;
   }
   if (opt === true) {
-    return '<true>';
+    return TRUE_STRING;
   }
   if (opt === false) {
-    return '<false>';
+    return FALSE_STRING;
   }
   if (typeof opt !== 'string' && opt.toString) {
     return opt.toString();
@@ -92,10 +83,10 @@ export function prepareCopyToClipboardTabularData(data, columns) {
   for (let i = 0; i < data.length; i += 1) {
     const row = {};
     for (let j = 0; j < columns.length; j += 1) {
-      // JavaScript does not mantain the order of a mixed set of keys (i.e integers and strings)
+      // JavaScript does not maintain the order of a mixed set of keys (i.e integers and strings)
       // the below function orders the keys based on the column names.
       const key = columns[j].name || columns[j];
-      if (data[i][key]) {
+      if (key in data[i]) {
         row[j] = data[i][key];
       } else {
         row[j] = data[i][parseFloat(key)];
@@ -106,18 +97,24 @@ export function prepareCopyToClipboardTabularData(data, columns) {
   return result;
 }
 
-export function applyFormattingToTabularData(data) {
-  if (!data || data.length === 0 || !('__timestamp' in data[0])) {
+export function applyFormattingToTabularData(data, timeFormattedColumns) {
+  if (
+    !data ||
+    data.length === 0 ||
+    ensureIsArray(timeFormattedColumns).length === 0
+  ) {
     return data;
   }
+
   return data.map(row => ({
     ...row,
     /* eslint-disable no-underscore-dangle */
-    __timestamp:
-      row.__timestamp === 0 || row.__timestamp
-        ? DATETIME_FORMATTER(new Date(row.__timestamp))
-        : row.__timestamp,
-    /* eslint-enable no-underscore-dangle */
+    ...timeFormattedColumns.reduce((acc, colName) => {
+      if (row[colName] !== null && row[colName] !== undefined) {
+        acc[colName] = DATETIME_FORMATTER(row[colName]);
+      }
+      return acc;
+    }, {}),
   }));
 }
 
@@ -135,4 +132,10 @@ export const detectOS = () => {
   if (appVersion.includes('Linux')) return 'Linux';
 
   return 'Unknown OS';
+};
+
+export const isSafari = () => {
+  const { userAgent } = navigator;
+
+  return userAgent && /^((?!chrome|android).)*safari/i.test(userAgent);
 };

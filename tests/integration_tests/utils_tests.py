@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 # isort:skip_file
-import unittest
 import uuid
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -24,8 +23,11 @@ import os
 import re
 from typing import Any, Tuple, List, Optional
 from unittest.mock import Mock, patch
+
+from superset.databases.commands.exceptions import DatabaseInvalidError
 from tests.integration_tests.fixtures.birth_names_dashboard import (
     load_birth_names_dashboard_with_slices,
+    load_birth_names_data,
 )
 
 import numpy as np
@@ -37,6 +39,7 @@ from sqlalchemy.exc import ArgumentError
 
 import tests.integration_tests.test_app
 from superset import app, db, security_manager
+from superset.constants import NO_TIME_RANGE
 from superset.exceptions import CertificateException, SupersetException
 from superset.models.core import Database, Log
 from superset.models.dashboard import Dashboard
@@ -53,7 +56,6 @@ from superset.utils.core import (
     get_form_data_token,
     get_iterable,
     get_email_address_list,
-    get_or_create_db,
     get_stacktrace,
     json_int_dttm_ser,
     json_iso_dttm_ser,
@@ -61,26 +63,23 @@ from superset.utils.core import (
     merge_extra_filters,
     merge_extra_form_data,
     merge_request_params,
-    NO_TIME_RANGE,
     normalize_dttm_col,
     parse_ssl_cert,
     parse_js_uri_path_item,
     split,
-    TimeRangeEndpoint,
     validate_json,
     zlib_compress,
     zlib_decompress,
+    DateColumn,
 )
+from superset.utils.database import get_or_create_db
 from superset.utils import schema
 from superset.utils.hashing import md5_sha_from_str
-from superset.views.utils import (
-    build_extra_filters,
-    get_form_data,
-    get_time_range_endpoints,
-)
+from superset.views.utils import build_extra_filters, get_form_data
 from tests.integration_tests.base_tests import SupersetTestCase
 from tests.integration_tests.fixtures.world_bank_dashboard import (
     load_world_bank_dashboard_with_slices,
+    load_world_bank_data,
 )
 
 from .fixtures.certificates import ssl_certificate
@@ -95,9 +94,10 @@ class TestUtils(SupersetTestCase):
         assert json_int_dttm_ser(datetime(1970, 1, 1)) == 0
         assert json_int_dttm_ser(date(1970, 1, 1)) == 0
         assert json_int_dttm_ser(dttm + timedelta(milliseconds=1)) == (ts + 1)
+        assert json_int_dttm_ser(np.int64(1)) == 1
 
         with self.assertRaises(TypeError):
-            json_int_dttm_ser("this is not a date")
+            json_int_dttm_ser(np.datetime64())
 
     def test_json_iso_dttm_ser(self):
         dttm = datetime(2020, 1, 1)
@@ -106,19 +106,31 @@ class TestUtils(SupersetTestCase):
         assert json_iso_dttm_ser(dttm) == dttm.isoformat()
         assert json_iso_dttm_ser(dt) == dt.isoformat()
         assert json_iso_dttm_ser(t) == t.isoformat()
+        assert json_iso_dttm_ser(np.int64(1)) == 1
+
+        assert (
+            json_iso_dttm_ser(np.datetime64(), pessimistic=True)
+            == "Unserializable [<class 'numpy.datetime64'>]"
+        )
 
         with self.assertRaises(TypeError):
-            json_iso_dttm_ser("this is not a date")
+            json_iso_dttm_ser(np.datetime64())
 
     def test_base_json_conv(self):
-        assert isinstance(base_json_conv(np.bool_(1)), bool) is True
-        assert isinstance(base_json_conv(np.int64(1)), int) is True
-        assert isinstance(base_json_conv(np.array([1, 2, 3])), list) is True
-        assert isinstance(base_json_conv(set([1])), list) is True
-        assert isinstance(base_json_conv(Decimal("1.0")), float) is True
-        assert isinstance(base_json_conv(uuid.uuid4()), str) is True
-        assert isinstance(base_json_conv(time()), str) is True
-        assert isinstance(base_json_conv(timedelta(0)), str) is True
+        assert isinstance(base_json_conv(np.bool_(1)), bool)
+        assert isinstance(base_json_conv(np.int64(1)), int)
+        assert isinstance(base_json_conv(np.array([1, 2, 3])), list)
+        assert base_json_conv(np.array(None)) is None
+        assert isinstance(base_json_conv(set([1])), list)
+        assert isinstance(base_json_conv(Decimal("1.0")), float)
+        assert isinstance(base_json_conv(uuid.uuid4()), str)
+        assert isinstance(base_json_conv(time()), str)
+        assert isinstance(base_json_conv(timedelta(0)), str)
+        assert isinstance(base_json_conv(bytes()), str)
+        assert base_json_conv(bytes("", encoding="utf-16")) == "[bytes]"
+
+        with pytest.raises(TypeError):
+            base_json_conv(np.datetime64())
 
     def test_zlib_compression(self):
         json_str = '{"test": 1}'
@@ -230,7 +242,6 @@ class TestUtils(SupersetTestCase):
                 {"col": "__time_col", "op": "in", "val": "birth_year"},
                 {"col": "__time_grain", "op": "in", "val": "years"},
                 {"col": "A", "op": "like", "val": "hello"},
-                {"col": "__time_origin", "op": "in", "val": "now"},
                 {"col": "__granularity", "op": "in", "val": "90 seconds"},
             ]
         }
@@ -250,12 +261,10 @@ class TestUtils(SupersetTestCase):
             "granularity_sqla": "birth_year",
             "time_grain_sqla": "years",
             "granularity": "90 seconds",
-            "druid_time_origin": "now",
             "applied_time_extras": {
                 "__time_range": "1 year ago :",
                 "__time_col": "birth_year",
                 "__time_grain": "years",
-                "__time_origin": "now",
                 "__granularity": "90 seconds",
             },
         }
@@ -739,60 +748,8 @@ class TestUtils(SupersetTestCase):
         db.session.commit()
 
     def test_get_or_create_db_invalid_uri(self):
-        with self.assertRaises(ArgumentError):
+        with self.assertRaises(DatabaseInvalidError):
             get_or_create_db("test_db", "yoursql:superset.db/()")
-
-    def test_get_time_range_endpoints(self):
-        self.assertEqual(
-            get_time_range_endpoints(form_data={}),
-            (TimeRangeEndpoint.INCLUSIVE, TimeRangeEndpoint.EXCLUSIVE),
-        )
-
-        self.assertEqual(
-            get_time_range_endpoints(
-                form_data={"time_range_endpoints": ["inclusive", "inclusive"]}
-            ),
-            (TimeRangeEndpoint.INCLUSIVE, TimeRangeEndpoint.INCLUSIVE),
-        )
-
-        self.assertEqual(
-            get_time_range_endpoints(form_data={"datasource": "1_druid"}),
-            (TimeRangeEndpoint.INCLUSIVE, TimeRangeEndpoint.EXCLUSIVE),
-        )
-
-        slc = Mock()
-        slc.datasource.database.get_extra.return_value = {}
-
-        self.assertEqual(
-            get_time_range_endpoints(form_data={"datasource": "1__table"}, slc=slc),
-            (TimeRangeEndpoint.UNKNOWN, TimeRangeEndpoint.INCLUSIVE),
-        )
-
-        slc.datasource.database.get_extra.return_value = {
-            "time_range_endpoints": ["inclusive", "inclusive"]
-        }
-
-        self.assertEqual(
-            get_time_range_endpoints(form_data={"datasource": "1__table"}, slc=slc),
-            (TimeRangeEndpoint.INCLUSIVE, TimeRangeEndpoint.INCLUSIVE),
-        )
-
-        self.assertIsNone(get_time_range_endpoints(form_data={}, slc=slc))
-
-        with app.app_context():
-            app.config["SIP_15_GRACE_PERIOD_END"] = date.today() + timedelta(days=1)
-
-            self.assertEqual(
-                get_time_range_endpoints(form_data={"datasource": "1__table"}, slc=slc),
-                (TimeRangeEndpoint.INCLUSIVE, TimeRangeEndpoint.INCLUSIVE),
-            )
-
-            app.config["SIP_15_GRACE_PERIOD_END"] = date.today()
-
-            self.assertEqual(
-                get_time_range_endpoints(form_data={"datasource": "1__table"}, slc=slc),
-                (TimeRangeEndpoint.INCLUSIVE, TimeRangeEndpoint.EXCLUSIVE),
-            )
 
     def test_get_iterable(self):
         self.assertListEqual(get_iterable(123), [123])
@@ -849,7 +806,11 @@ class TestUtils(SupersetTestCase):
         }
         merge_extra_form_data(form_data)
         self.assertEqual(
-            form_data, {"time_range": "Last 10 days", "adhoc_filters": [],},
+            form_data,
+            {
+                "time_range": "Last 10 days",
+                "adhoc_filters": [],
+            },
         )
 
     def test_merge_extra_filters_with_unset_legacy_time_range(self):
@@ -881,7 +842,9 @@ class TestUtils(SupersetTestCase):
         form_data = {
             "time_range": "Last 10 days",
             "extra_filters": [{"col": "__time_range", "op": "==", "val": "Last week"}],
-            "extra_form_data": {"time_range": "Last year",},
+            "extra_form_data": {
+                "time_range": "Last year",
+            },
         }
         merge_extra_filters(form_data)
         self.assertEqual(
@@ -956,12 +919,6 @@ class TestUtils(SupersetTestCase):
     def test_get_form_data_default(self) -> None:
         with app.test_request_context():
             form_data, slc = get_form_data()
-
-            self.assertEqual(
-                form_data,
-                {"time_range_endpoints": get_time_range_endpoints(form_data={})},
-            )
-
             self.assertEqual(slc, None)
 
     def test_get_form_data_request_args(self) -> None:
@@ -969,29 +926,13 @@ class TestUtils(SupersetTestCase):
             query_string={"form_data": json.dumps({"foo": "bar"})}
         ):
             form_data, slc = get_form_data()
-
-            self.assertEqual(
-                form_data,
-                {
-                    "foo": "bar",
-                    "time_range_endpoints": get_time_range_endpoints(form_data={}),
-                },
-            )
-
+            self.assertEqual(form_data, {"foo": "bar"})
             self.assertEqual(slc, None)
 
     def test_get_form_data_request_form(self) -> None:
         with app.test_request_context(data={"form_data": json.dumps({"foo": "bar"})}):
             form_data, slc = get_form_data()
-
-            self.assertEqual(
-                form_data,
-                {
-                    "foo": "bar",
-                    "time_range_endpoints": get_time_range_endpoints(form_data={}),
-                },
-            )
-
+            self.assertEqual(form_data, {"foo": "bar"})
             self.assertEqual(slc, None)
 
     def test_get_form_data_request_form_with_queries(self) -> None:
@@ -1003,15 +944,7 @@ class TestUtils(SupersetTestCase):
             }
         ):
             form_data, slc = get_form_data()
-
-            self.assertEqual(
-                form_data,
-                {
-                    "url_params": {"foo": "bar"},
-                    "time_range_endpoints": get_time_range_endpoints(form_data={}),
-                },
-            )
-
+            self.assertEqual(form_data, {"url_params": {"foo": "bar"}})
             self.assertEqual(slc, None)
 
     def test_get_form_data_request_args_and_form(self) -> None:
@@ -1020,16 +953,7 @@ class TestUtils(SupersetTestCase):
             query_string={"form_data": json.dumps({"baz": "bar"})},
         ):
             form_data, slc = get_form_data()
-
-            self.assertEqual(
-                form_data,
-                {
-                    "baz": "bar",
-                    "foo": "bar",
-                    "time_range_endpoints": get_time_range_endpoints(form_data={}),
-                },
-            )
-
+            self.assertEqual(form_data, {"baz": "bar", "foo": "bar"})
             self.assertEqual(slc, None)
 
     def test_get_form_data_globals(self) -> None:
@@ -1037,15 +961,7 @@ class TestUtils(SupersetTestCase):
             g.form_data = {"foo": "bar"}
             form_data, slc = get_form_data()
             delattr(g, "form_data")
-
-            self.assertEqual(
-                form_data,
-                {
-                    "foo": "bar",
-                    "time_range_endpoints": get_time_range_endpoints(form_data={}),
-                },
-            )
-
+            self.assertEqual(form_data, {"foo": "bar"})
             self.assertEqual(slc, None)
 
     def test_get_form_data_corrupted_json(self) -> None:
@@ -1054,12 +970,7 @@ class TestUtils(SupersetTestCase):
             query_string={"form_data": '{"baz": "bar"'},
         ):
             form_data, slc = get_form_data()
-
-            self.assertEqual(
-                form_data,
-                {"time_range_endpoints": get_time_range_endpoints(form_data={})},
-            )
-
+            self.assertEqual(form_data, {})
             self.assertEqual(slc, None)
 
     @pytest.mark.usefixtures("load_birth_names_dashboard_with_slices")
@@ -1162,10 +1073,21 @@ class TestUtils(SupersetTestCase):
             df: pd.DataFrame,
             timestamp_format: Optional[str],
             offset: int,
-            time_shift: Optional[timedelta],
+            time_shift: Optional[str],
         ) -> pd.DataFrame:
             df = df.copy()
-            normalize_dttm_col(df, timestamp_format, offset, time_shift)
+            normalize_dttm_col(
+                df,
+                tuple(
+                    [
+                        DateColumn.get_legacy_time_column(
+                            timestamp_format=timestamp_format,
+                            offset=offset,
+                            time_shift=time_shift,
+                        )
+                    ]
+                ),
+            )
             return df
 
         ts = pd.Timestamp(2021, 2, 15, 19, 0, 0, 0)
@@ -1182,9 +1104,9 @@ class TestUtils(SupersetTestCase):
         )
 
         # test offset and timedelta
-        assert normalize_col(df, None, 1, timedelta(minutes=30))[DTTM_ALIAS][
-            0
-        ] == pd.Timestamp(2021, 2, 15, 20, 30, 0, 0)
+        assert normalize_col(df, None, 1, "30 minutes")[DTTM_ALIAS][0] == pd.Timestamp(
+            2021, 2, 15, 20, 30, 0, 0
+        )
 
         # test numeric epoch_s format
         df = pd.DataFrame([{"__timestamp": ts.timestamp(), "a": 1}])
@@ -1193,3 +1115,8 @@ class TestUtils(SupersetTestCase):
         # test numeric epoch_ms format
         df = pd.DataFrame([{"__timestamp": ts.timestamp() * 1000, "a": 1}])
         assert normalize_col(df, "epoch_ms", 0, None)[DTTM_ALIAS][0] == ts
+
+        # test that out of bounds timestamps are coerced to None instead of
+        # erroring out
+        df = pd.DataFrame([{"__timestamp": "1677-09-21 00:00:00", "a": 1}])
+        assert pd.isnull(normalize_col(df, None, 0, None)[DTTM_ALIAS][0])

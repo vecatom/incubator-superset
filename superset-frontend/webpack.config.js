@@ -26,6 +26,7 @@ const HtmlWebpackPlugin = require('html-webpack-plugin');
 const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 const CssMinimizerPlugin = require('css-minimizer-webpack-plugin');
 const SpeedMeasurePlugin = require('speed-measure-webpack-plugin');
+const createMdxCompiler = require('@storybook/addon-docs/mdx-compiler-plugin');
 const {
   WebpackManifestPlugin,
   getCompilerHooks,
@@ -74,7 +75,7 @@ if (!isDevMode) {
 
 const plugins = [
   new webpack.ProvidePlugin({
-    process: 'process/browser',
+    process: 'process/browser.js',
   }),
 
   // creates a manifest.json mapping of name to hashed output used in template files
@@ -95,10 +96,10 @@ const plugins = [
         entryFiles[entry] = {
           css: chunks
             .filter(x => x.endsWith('.css'))
-            .map(x => path.join(output.publicPath, x)),
+            .map(x => `${output.publicPath}${x}`),
           js: chunks
             .filter(x => x.endsWith('.js'))
-            .map(x => path.join(output.publicPath, x)),
+            .map(x => `${output.publicPath}${x}`),
         };
       });
 
@@ -208,8 +209,7 @@ const config = {
     theme: path.join(APP_DIR, '/src/theme.ts'),
     menu: addPreamble('src/views/menu.tsx'),
     spa: addPreamble('/src/views/index.tsx'),
-    addSlice: addPreamble('/src/addSlice/index.tsx'),
-    explore: addPreamble('/src/explore/index.jsx'),
+    embedded: addPreamble('/src/embedded/index.tsx'),
     sqllab: addPreamble('/src/SqlLab/index.tsx'),
     profile: addPreamble('/src/profile/index.tsx'),
     showSavedQuery: [path.join(APP_DIR, '/src/showSavedQuery/index.jsx')],
@@ -282,12 +282,21 @@ const config = {
     minimizer: [new CssMinimizerPlugin(), '...'],
   },
   resolve: {
-    modules: [APP_DIR, 'node_modules', ROOT_DIR],
-    alias: {},
+    // resolve modules from `/superset_frontend/node_modules` and `/superset_frontend`
+    modules: ['node_modules', APP_DIR],
+    alias: {
+      // TODO: remove aliases once React has been upgraded to v. 17 and
+      //  AntD version conflict has been resolved
+      antd: path.resolve(path.join(APP_DIR, './node_modules/antd')),
+      react: path.resolve(path.join(APP_DIR, './node_modules/react')),
+      // TODO: remove Handlebars alias once Handlebars NPM package has been updated to
+      // correctly support webpack import (https://github.com/handlebars-lang/handlebars.js/issues/953)
+      handlebars: 'handlebars/dist/handlebars.js',
+    },
     extensions: ['.ts', '.tsx', '.js', '.jsx', '.yml'],
     fallback: {
       fs: false,
-      vm: false,
+      vm: require.resolve('vm-browserify'),
       path: false,
     },
   },
@@ -333,9 +342,20 @@ const config = {
         exclude: [/superset-ui.*\/node_modules\//, /\.test.jsx?$/],
         include: [
           new RegExp(`${APP_DIR}/(src|.storybook|plugins|packages)`),
+          ...['./src', './.storybook', './plugins', './packages'].map(p =>
+            path.resolve(__dirname, p),
+          ), // redundant but required for windows
           /@encodable/,
         ],
         use: [babelLoader],
+      },
+      // react-hot-loader use "ProxyFacade", which is a wrapper for react Component
+      // see https://github.com/gaearon/react-hot-loader/issues/1311
+      // TODO: refactor recurseReactClone
+      {
+        test: /\.js$/,
+        include: /node_modules\/react-dom/,
+        use: ['react-hot-loader/webpack'],
       },
       {
         test: /\.css$/,
@@ -345,7 +365,7 @@ const config = {
           {
             loader: 'css-loader',
             options: {
-              sourceMap: isDevMode,
+              sourceMap: true,
             },
           },
         ],
@@ -358,14 +378,16 @@ const config = {
           {
             loader: 'css-loader',
             options: {
-              sourceMap: isDevMode,
+              sourceMap: true,
             },
           },
           {
             loader: 'less-loader',
             options: {
-              sourceMap: isDevMode,
-              javascriptEnabled: true,
+              sourceMap: true,
+              lessOptions: {
+                javascriptEnabled: true,
+              },
             },
           },
         ],
@@ -389,7 +411,19 @@ const config = {
       {
         test: /\.svg(\?v=\d+\.\d+\.\d+)?$/,
         issuer: /\.([jt])sx?$/,
-        use: ['@svgr/webpack'],
+        use: [
+          {
+            loader: '@svgr/webpack',
+            options: {
+              svgoConfig: {
+                plugins: {
+                  removeViewBox: false,
+                  icon: true,
+                },
+              },
+            },
+          },
+        ],
       },
       {
         test: /\.(jpg|gif)$/,
@@ -408,6 +442,28 @@ const config = {
         include: ROOT_DIR,
         loader: 'js-yaml-loader',
       },
+      {
+        test: /\.geojson$/,
+        type: 'asset/resource',
+      },
+      {
+        test: /\.(stories|story)\.mdx$/,
+        use: [
+          {
+            loader: 'babel-loader',
+            // may or may not need this line depending on your app's setup
+            options: {
+              plugins: ['@babel/plugin-transform-react-jsx'],
+            },
+          },
+          {
+            loader: '@mdx-js/loader',
+            options: {
+              compilers: [createMdxCompiler({})],
+            },
+          },
+        ],
+      },
     ],
   },
   externals: {
@@ -416,28 +472,17 @@ const config = {
     'react/lib/ReactContext': true,
   },
   plugins,
-  devtool: false,
+  devtool: 'source-map',
 };
 
 // find all the symlinked plugins and use their source code for imports
-Object.entries(packageConfig.dependencies).forEach(([pkg, version]) => {
-  const srcPath = `./node_modules/${pkg}/src`;
+Object.entries(packageConfig.dependencies).forEach(([pkg, relativeDir]) => {
+  const srcPath = path.join(APP_DIR, `./node_modules/${pkg}/src`);
+  const dir = relativeDir.replace('file:', '');
+
   if (/^@superset-ui/.test(pkg) && fs.existsSync(srcPath)) {
-    console.log(`[Superset Plugin] Use symlink source for ${pkg} @ ${version}`);
-    // only allow exact match so imports like `@superset-ui/plugin-name/lib`
-    // and `@superset-ui/plugin-name/esm` can still work.
-    const pkgDirectory = pkg.split('/').pop();
-    if (/^(core|chart-controls)/.test(pkgDirectory)) {
-      config.resolve.alias[pkg] = path.resolve(
-        APP_DIR,
-        `packages/superset-ui-${pkgDirectory}/src`,
-      );
-    } else {
-      config.resolve.alias[pkg] = path.resolve(
-        APP_DIR,
-        `plugins/${pkgDirectory}/src`,
-      );
-    }
+    console.log(`[Superset Plugin] Use symlink source for ${pkg} @ ${dir}`);
+    config.resolve.alias[pkg] = path.resolve(APP_DIR, `${dir}/src`);
   }
 });
 console.log(''); // pure cosmetic new line

@@ -18,11 +18,12 @@
  */
 import React from 'react';
 import { CommonWrapper } from 'enzyme';
+import { render, screen } from '@testing-library/react';
 import TableChart from '../src/TableChart';
 import transformProps from '../src/transformProps';
 import DateWithFormatter from '../src/utils/DateWithFormatter';
 import testData from './testData';
-import { mount } from './enzyme';
+import { mount, ProviderWrapper } from './enzyme';
 
 describe('plugin-chart-table', () => {
   describe('transformProps', () => {
@@ -67,7 +68,7 @@ describe('plugin-chart-table', () => {
   });
 
   describe('TableChart', () => {
-    let wrap: CommonWrapper; // the ReactDataTable wraper
+    let wrap: CommonWrapper; // the ReactDataTable wrapper
     let tree: Cheerio;
 
     it('render basic data', () => {
@@ -76,7 +77,7 @@ describe('plugin-chart-table', () => {
       );
       tree = wrap.render(); // returns a CheerioWrapper with jQuery-like API
       const cells = tree.find('td');
-      expect(cells).toHaveLength(8);
+      expect(cells).toHaveLength(12);
       expect(cells.eq(0).text()).toEqual('2020-01-01 12:34:56');
       expect(cells.eq(1).text()).toEqual('Michael');
       // number is not in `metrics` list, so it should output raw value
@@ -85,6 +86,7 @@ describe('plugin-chart-table', () => {
       // should not render column with `.` in name as `undefined`
       expect(cells.eq(3).text()).toEqual('foo');
       expect(cells.eq(6).text()).toEqual('2467');
+      expect(cells.eq(8).text()).toEqual('N/A');
     });
 
     it('render advanced data', () => {
@@ -92,7 +94,7 @@ describe('plugin-chart-table', () => {
         <TableChart {...transformProps(testData.advanced)} sticky={false} />,
       );
       tree = wrap.render();
-      // should successfull rerender with new props
+      // should successful rerender with new props
       const cells = tree.find('td');
       expect(tree.find('th').eq(1).text()).toEqual('Sum of Num');
       expect(cells.eq(2).text()).toEqual('12.346%');
@@ -103,6 +105,78 @@ describe('plugin-chart-table', () => {
       wrap.setProps({ ...transformProps(testData.empty), sticky: false });
       tree = wrap.render();
       expect(tree.text()).toContain('No records found');
+    });
+
+    it('render color with column color formatter', () => {
+      render(
+        ProviderWrapper({
+          children: (
+            <TableChart
+              {...transformProps({
+                ...testData.advanced,
+                rawFormData: {
+                  ...testData.advanced.rawFormData,
+                  conditional_formatting: [
+                    {
+                      colorScheme: '#ACE1C4',
+                      column: 'sum__num',
+                      operator: '>',
+                      targetValue: 2467,
+                    },
+                  ],
+                },
+              })}
+            />
+          ),
+        }),
+      );
+
+      expect(getComputedStyle(screen.getByTitle('2467063')).background).toBe(
+        'rgba(172, 225, 196, 1)',
+      );
+      expect(getComputedStyle(screen.getByTitle('2467')).background).toBe('');
+    });
+
+    it('render cell without color', () => {
+      const dataWithEmptyCell = testData.advanced.queriesData[0];
+      dataWithEmptyCell.data.push({
+        __timestamp: null,
+        name: 'Noah',
+        sum__num: null,
+        '%pct_nice': 0.643,
+        'abc.com': 'bazzinga',
+      });
+
+      render(
+        ProviderWrapper({
+          children: (
+            <TableChart
+              {...transformProps({
+                ...testData.advanced,
+                queriesData: [dataWithEmptyCell],
+                rawFormData: {
+                  ...testData.advanced.rawFormData,
+                  conditional_formatting: [
+                    {
+                      colorScheme: '#ACE1C4',
+                      column: 'sum__num',
+                      operator: '<',
+                      targetValue: 12342,
+                    },
+                  ],
+                },
+              })}
+            />
+          ),
+        }),
+      );
+      expect(getComputedStyle(screen.getByTitle('2467')).background).toBe(
+        'rgba(172, 225, 196, 0.812)',
+      );
+      expect(getComputedStyle(screen.getByTitle('2467063')).background).toBe(
+        '',
+      );
+      expect(getComputedStyle(screen.getByText('N/A')).background).toBe('');
     });
   });
 });

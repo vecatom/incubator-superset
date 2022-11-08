@@ -25,14 +25,13 @@ import moment from 'moment';
 import { useListViewResource } from 'src/views/CRUD/hooks';
 import { createFetchRelated, createErrorHandler } from 'src/views/CRUD/utils';
 import withToasts from 'src/components/MessageToasts/withToasts';
-import SubMenu, { SubMenuProps } from 'src/components/Menu/SubMenu';
+import SubMenu, { SubMenuProps } from 'src/views/components/SubMenu';
 import ActionsBar, { ActionProps } from 'src/components/ListView/ActionsBar';
 import ListView, {
   ListViewProps,
   Filters,
   FilterOperator,
 } from 'src/components/ListView';
-import Button from 'src/components/Button';
 import DeleteModal from 'src/components/DeleteModal';
 import ConfirmStatusChange from 'src/components/ConfirmStatusChange';
 import AnnotationLayerModal from './AnnotationLayerModal';
@@ -284,6 +283,7 @@ function AnnotationLayersList({
     () => [
       {
         Header: t('Created by'),
+        key: 'created_by',
         id: 'created_by',
         input: 'select',
         operator: FilterOperator.relationOneMany,
@@ -303,6 +303,7 @@ function AnnotationLayersList({
       },
       {
         Header: t('Search'),
+        key: 'search',
         id: 'name',
         input: 'search',
         operator: FilterOperator.contains,
@@ -311,22 +312,15 @@ function AnnotationLayersList({
     [],
   );
 
-  const EmptyStateButton = (
-    <Button
-      buttonStyle="primary"
-      onClick={() => {
-        handleAnnotationLayerEdit(null);
-      }}
-    >
+  const emptyState = {
+    title: t('No annotation layers yet'),
+    image: 'filter-results.svg',
+    buttonAction: () => handleAnnotationLayerEdit(null),
+    buttonText: (
       <>
         <i className="fa fa-plus" /> {t('Annotation layer')}
       </>
-    </Button>
-  );
-
-  const emptyState = {
-    message: t('No annotation layers yet'),
-    slot: EmptyStateButton,
+    ),
   };
 
   const onLayerAdd = (id?: number) => {

@@ -25,7 +25,7 @@ import { styledMount as mount } from 'spec/helpers/theming';
 import waitForComponentToPaint from 'spec/helpers/waitForComponentToPaint';
 import { Switch } from 'src/components/Switch';
 import ListView from 'src/components/ListView';
-import SubMenu from 'src/components/Menu/SubMenu';
+import SubMenu from 'src/views/components/SubMenu';
 import AlertList from 'src/views/CRUD/alert/AlertList';
 import IndeterminateCheckbox from 'src/components/IndeterminateCheckbox';
 import { act } from 'react-dom/test-utils';
@@ -55,7 +55,7 @@ const mockalerts = [...new Array(3)].map((_, i) => ({
   last_eval_dttm: Date.now(),
   last_state: 'ok',
   name: `alert ${i}  `,
-  owners: [],
+  owners: [{ id: 1 }],
   recipients: [
     {
       id: `${i}`,
@@ -67,6 +67,8 @@ const mockalerts = [...new Array(3)].map((_, i) => ({
 
 const mockUser = {
   userId: 1,
+  firstName: 'user 1',
+  lastName: 'lastname',
 };
 
 fetchMock.get(alertsEndpoint, {

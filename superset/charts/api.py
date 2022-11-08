@@ -19,9 +19,9 @@ import logging
 from datetime import datetime
 from io import BytesIO
 from typing import Any, Optional
-from zipfile import ZipFile
+from zipfile import is_zipfile, ZipFile
 
-from flask import g, redirect, request, Response, send_file, url_for
+from flask import redirect, request, Response, send_file, url_for
 from flask_appbuilder.api import expose, protect, rison, safe
 from flask_appbuilder.hooks import before_request
 from flask_appbuilder.models.sqla.interface import SQLAInterface
@@ -30,7 +30,7 @@ from marshmallow import ValidationError
 from werkzeug.wrappers import Response as WerkzeugResponse
 from werkzeug.wsgi import FileWrapper
 
-from superset import is_feature_enabled, thumbnail_cache
+from superset import app, is_feature_enabled, thumbnail_cache
 from superset.charts.commands.bulk_delete import BulkDeleteChartCommand
 from superset.charts.commands.create import CreateChartCommand
 from superset.charts.commands.delete import DeleteChartCommand
@@ -50,8 +50,10 @@ from superset.charts.dao import ChartDAO
 from superset.charts.filters import (
     ChartAllTextFilter,
     ChartCertifiedFilter,
+    ChartCreatedByMeFilter,
     ChartFavoriteFilter,
     ChartFilter,
+    ChartHasCreatedByFilter,
 )
 from superset.charts.schemas import (
     CHART_SCHEMAS,
@@ -64,7 +66,10 @@ from superset.charts.schemas import (
     screenshot_query_schema,
     thumbnail_query_schema,
 )
-from superset.commands.importers.exceptions import NoValidFilesFoundError
+from superset.commands.importers.exceptions import (
+    IncorrectFormatError,
+    NoValidFilesFoundError,
+)
 from superset.commands.importers.v1.utils import get_contents_from_bundle
 from superset.constants import MODEL_API_RW_METHOD_PERMISSION_MAP, RouteMethod
 from superset.extensions import event_logger
@@ -75,11 +80,14 @@ from superset.utils.urls import get_url_path
 from superset.views.base_api import (
     BaseSupersetModelRestApi,
     RelatedFieldFilter,
+    requires_form_data,
+    requires_json,
     statsd_metrics,
 )
-from superset.views.filters import FilterRelatedOwners
+from superset.views.filters import BaseFilterRelatedUsers, FilterRelatedOwners
 
 logger = logging.getLogger(__name__)
+config = app.config
 
 
 class ChartRestApi(BaseSupersetModelRestApi):
@@ -111,21 +119,29 @@ class ChartRestApi(BaseSupersetModelRestApi):
         "cache_timeout",
         "certified_by",
         "certification_details",
+        "changed_on_delta_humanized",
         "dashboards.dashboard_title",
         "dashboards.id",
         "dashboards.json_metadata",
         "description",
+        "id",
         "owners.first_name",
         "owners.id",
         "owners.last_name",
         "owners.username",
+        "dashboards.id",
+        "dashboards.dashboard_title",
         "params",
         "slice_name",
+        "thumbnail_url",
+        "url",
         "viz_type",
         "query_context",
+        "is_managed_externally",
     ]
     show_select_columns = show_columns + ["table.id"]
     list_columns = [
+        "is_managed_externally",
         "certified_by",
         "certification_details",
         "cache_timeout",
@@ -138,6 +154,7 @@ class ChartRestApi(BaseSupersetModelRestApi):
         "created_by.first_name",
         "created_by.id",
         "created_by.last_name",
+        "created_on_delta_humanized",
         "datasource_id",
         "datasource_name_text",
         "datasource_type",
@@ -154,6 +171,8 @@ class ChartRestApi(BaseSupersetModelRestApi):
         "owners.id",
         "owners.last_name",
         "owners.username",
+        "dashboards.id",
+        "dashboards.dashboard_title",
         "params",
         "slice_name",
         "table.default_endpoint",
@@ -188,6 +207,7 @@ class ChartRestApi(BaseSupersetModelRestApi):
         "description",
         "id",
         "owners",
+        "dashboards",
         "slice_name",
         "viz_type",
     ]
@@ -196,6 +216,7 @@ class ChartRestApi(BaseSupersetModelRestApi):
     search_filters = {
         "id": [ChartFavoriteFilter, ChartCertifiedFilter],
         "slice_name": [ChartAllTextFilter],
+        "created_by": [ChartHasCreatedByFilter, ChartCreatedByMeFilter],
     }
 
     # Will just affect _info endpoint
@@ -223,7 +244,10 @@ class ChartRestApi(BaseSupersetModelRestApi):
         "slices": ("slice_name", "asc"),
         "owners": ("first_name", "asc"),
     }
-
+    filter_rel_fields = {
+        "owners": [["id", BaseFilterRelatedUsers, lambda: []]],
+        "created_by": [["id", BaseFilterRelatedUsers, lambda: []]],
+    }
     related_field_filters = {
         "owners": RelatedFieldFilter("first_name", FilterRelatedOwners),
         "created_by": RelatedFieldFilter("first_name", FilterRelatedOwners),
@@ -239,6 +263,7 @@ class ChartRestApi(BaseSupersetModelRestApi):
         action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.post",
         log_to_statsd=False,
     )
+    @requires_json
     def post(self) -> Response:
         """Creates a new Chart
         ---
@@ -273,15 +298,13 @@ class ChartRestApi(BaseSupersetModelRestApi):
             500:
               $ref: '#/components/responses/500'
         """
-        if not request.is_json:
-            return self.response_400(message="Request is not JSON")
         try:
             item = self.add_model_schema.load(request.json)
         # This validates custom Schema with custom validations
         except ValidationError as error:
             return self.response_400(message=error.messages)
         try:
-            new_model = CreateChartCommand(g.user, item).run()
+            new_model = CreateChartCommand(item).run()
             return self.response(201, id=new_model.id, result=item)
         except ChartInvalidError as ex:
             return self.response_422(message=ex.normalized_messages())
@@ -302,6 +325,7 @@ class ChartRestApi(BaseSupersetModelRestApi):
         action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.put",
         log_to_statsd=False,
     )
+    @requires_json
     def put(self, pk: int) -> Response:
         """Changes a Chart
         ---
@@ -345,15 +369,13 @@ class ChartRestApi(BaseSupersetModelRestApi):
             500:
               $ref: '#/components/responses/500'
         """
-        if not request.is_json:
-            return self.response_400(message="Request is not JSON")
         try:
             item = self.edit_model_schema.load(request.json)
         # This validates custom Schema with custom validations
         except ValidationError as error:
             return self.response_400(message=error.messages)
         try:
-            changed_model = UpdateChartCommand(g.user, pk, item).run()
+            changed_model = UpdateChartCommand(pk, item).run()
             response = self.response(200, id=changed_model.id, result=item)
         except ChartNotFoundError:
             response = self.response_404()
@@ -413,7 +435,7 @@ class ChartRestApi(BaseSupersetModelRestApi):
               $ref: '#/components/responses/500'
         """
         try:
-            DeleteChartCommand(g.user, pk).run()
+            DeleteChartCommand(pk).run()
             return self.response(200, message="OK")
         except ChartNotFoundError:
             return self.response_404()
@@ -473,7 +495,7 @@ class ChartRestApi(BaseSupersetModelRestApi):
         """
         item_ids = kwargs["rison"]
         try:
-            BulkDeleteChartCommand(g.user, item_ids).run()
+            BulkDeleteChartCommand(item_ids).run()
             return self.response(
                 200,
                 message=ngettext(
@@ -514,14 +536,12 @@ class ChartRestApi(BaseSupersetModelRestApi):
                 schema:
                   $ref: '#/components/schemas/screenshot_query_schema'
           responses:
-            200:
+            202:
               description: Chart async result
               content:
                 application/json:
                   schema:
                     $ref: "#/components/schemas/ChartCacheScreenshotResponseSchema"
-            302:
-              description: Redirects to the current digest
             400:
               $ref: '#/components/responses/400'
             401:
@@ -594,8 +614,6 @@ class ChartRestApi(BaseSupersetModelRestApi):
                  schema:
                    type: string
                    format: binary
-            302:
-              description: Redirects to the current digest
             400:
               $ref: '#/components/responses/400'
             401:
@@ -806,7 +824,7 @@ class ChartRestApi(BaseSupersetModelRestApi):
         charts = ChartDAO.find_by_ids(requested_ids)
         if not charts:
             return self.response_404()
-        favorited_chart_ids = ChartDAO.favorited_ids(charts, g.user.get_id())
+        favorited_chart_ids = ChartDAO.favorited_ids(charts)
         res = [
             {"id": request_id, "value": request_id in favorited_chart_ids}
             for request_id in requested_ids
@@ -820,6 +838,7 @@ class ChartRestApi(BaseSupersetModelRestApi):
         action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.import_",
         log_to_statsd=False,
     )
+    @requires_form_data
     def import_(self) -> Response:
         """Import chart(s) with associated datasets and databases
         ---
@@ -836,10 +855,15 @@ class ChartRestApi(BaseSupersetModelRestApi):
                       type: string
                       format: binary
                     passwords:
-                      description: JSON map of passwords for each file
+                      description: >-
+                        JSON map of passwords for each featured database in the
+                        ZIP file. If the ZIP includes a database config in the path
+                        `databases/MyDatabase.yaml`, the password should be provided
+                        in the following format:
+                        `{"databases/MyDatabase.yaml": "my_password"}`.
                       type: string
                     overwrite:
-                      description: overwrite existing databases?
+                      description: overwrite existing charts?
                       type: boolean
           responses:
             200:
@@ -863,6 +887,8 @@ class ChartRestApi(BaseSupersetModelRestApi):
         upload = request.files.get("formData")
         if not upload:
             return self.response_400()
+        if not is_zipfile(upload):
+            raise IncorrectFormatError("Not a ZIP file")
         with ZipFile(upload) as bundle:
             contents = get_contents_from_bundle(bundle)
 

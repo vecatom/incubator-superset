@@ -38,10 +38,11 @@ import { Switch } from 'src/components/Switch';
 import Modal from 'src/components/Modal';
 import TimezoneSelector from 'src/components/TimezoneSelector';
 import { Radio } from 'src/components/Radio';
-import Select, { propertyComparator } from 'src/components/Select/Select';
+import { propertyComparator } from 'src/components/Select/utils';
 import { FeatureFlag, isFeatureEnabled } from 'src/featureFlags';
 import withToasts from 'src/components/MessageToasts/withToasts';
 import Owner from 'src/types/Owner';
+import { AntdCheckbox, AsyncSelect, Select } from 'src/components';
 import TextAreaControl from 'src/explore/components/controls/TextAreaControl';
 import { useCommonConf } from 'src/views/CRUD/data/database/state';
 import {
@@ -54,6 +55,7 @@ import {
   Operator,
   Recipient,
 } from 'src/views/CRUD/alert/types';
+import { InfoTooltipWithTrigger } from '@superset-ui/chart-controls';
 import { AlertReportCronScheduler } from './components/AlertReportCronScheduler';
 import { NotificationMethod } from './components/NotificationMethod';
 
@@ -71,6 +73,7 @@ type SelectValue = {
 };
 
 interface AlertReportModalProps {
+  addSuccessToast: (msg: string) => void;
   addDangerToast: (msg: string) => void;
   alert?: AlertObject | null;
   isReport?: boolean;
@@ -85,37 +88,30 @@ const CONDITIONS = [
   {
     label: t('< (Smaller than)'),
     value: '<',
-    order: 0,
   },
   {
     label: t('> (Larger than)'),
     value: '>',
-    order: 1,
   },
   {
     label: t('<= (Smaller or equal)'),
     value: '<=',
-    order: 2,
   },
   {
     label: t('>= (Larger or equal)'),
     value: '>=',
-    order: 3,
   },
   {
     label: t('== (Is equal)'),
     value: '==',
-    order: 4,
   },
   {
     label: t('!= (Is not equal)'),
     value: '!=',
-    order: 5,
   },
   {
     label: t('Not null'),
     value: 'not null',
-    order: 6,
   },
 ];
 
@@ -153,10 +149,14 @@ const DEFAULT_ALERT = {
   sql: '',
   validator_config_json: {},
   validator_type: '',
+  force_screenshot: false,
   grace_period: undefined,
 };
 
 const StyledModal = styled(Modal)`
+  max-width: 1200px;
+  width: 100%;
+
   .ant-modal-body {
     overflow: initial;
   }
@@ -169,7 +169,6 @@ const StyledIcon = (theme: SupersetTheme) => css`
 
 const StyledSectionContainer = styled.div`
   display: flex;
-  min-width: 1000px;
   flex-direction: column;
 
   .header-section {
@@ -264,7 +263,7 @@ export const StyledInputContainer = styled.div`
   .helper {
     display: block;
     color: ${({ theme }) => theme.colors.grayscale.base};
-    font-size: ${({ theme }) => theme.typography.sizes.s - 1}px;
+    font-size: ${({ theme }) => theme.typography.sizes.s}px;
     padding: ${({ theme }) => theme.gridUnit}px 0;
     text-align: left;
   }
@@ -339,6 +338,10 @@ const StyledRadioGroup = styled(Radio.Group)`
   margin-left: ${({ theme }) => theme.gridUnit * 5.5}px;
 `;
 
+const StyledCheckbox = styled(AntdCheckbox)`
+  margin-left: ${({ theme }) => theme.gridUnit * 5.5}px;
+`;
+
 // Notification Method components
 const StyledNotificationAddButton = styled.div`
   color: ${({ theme }) => theme.colors.primary.dark1};
@@ -402,6 +405,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
   show,
   alert = null,
   isReport = false,
+  addSuccessToast,
 }) => {
   const conf = useCommonConf();
   const allowedNotificationMethods: NotificationMethodOption[] =
@@ -415,6 +419,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
   const [reportFormat, setReportFormat] = useState<string>(
     DEFAULT_NOTIFICATION_FORMAT,
   );
+  const [forceScreenshot, setForceScreenshot] = useState<boolean>(false);
 
   // Dropdown options
   const [conditionNotNull, setConditionNotNull] = useState<boolean>(false);
@@ -508,9 +513,11 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
       }
     });
 
+    const shouldEnableForceScreenshot = contentType === 'chart' && !isReport;
     const data: any = {
       ...currentAlert,
       type: isReport ? 'Report' : 'Alert',
+      force_screenshot: shouldEnableForceScreenshot || forceScreenshot,
       validator_type: conditionNotNull ? 'not null' : 'operator',
       validator_config_json: conditionNotNull
         ? {}
@@ -537,7 +544,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
 
     if (isEditMode) {
       // Edit
-      if (currentAlert && currentAlert.id) {
+      if (currentAlert?.id) {
         const update_id = currentAlert.id;
 
         delete data.id;
@@ -552,6 +559,8 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
             return;
           }
 
+          addSuccessToast(t('%s updated', data.type));
+
           if (onAdd) {
             onAdd();
           }
@@ -565,6 +574,8 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
         if (!response) {
           return;
         }
+
+        addSuccessToast(t('%s updated', data.type));
 
         if (onAdd) {
           onAdd(response);
@@ -585,7 +596,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
           page_size: pageSize,
         });
         return SupersetClient.get({
-          endpoint: `/api/v1/report/related/owners?q=${query}`,
+          endpoint: `/api/v1/report/related/created_by?q=${query}`,
         }).then(response => ({
           data: response.json.result.map(
             (item: { value: number; text: string }) => ({
@@ -653,8 +664,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
     [],
   );
 
-  const databaseLabel =
-    currentAlert && currentAlert.database && !currentAlert.database.label;
+  const databaseLabel = currentAlert?.database && !currentAlert.database.label;
   useEffect(() => {
     // Find source if current alert has one set
     if (databaseLabel) {
@@ -665,7 +675,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
   const loadDashboardOptions = useMemo(
     () =>
       (input = '', page: number, pageSize: number) => {
-        const query = rison.encode({
+        const query = rison.encode_uri({
           filter: input,
           page,
           page_size: pageSize,
@@ -727,8 +737,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
     [chartOptions, currentAlert?.chart],
   );
 
-  const noChartLabel =
-    currentAlert && currentAlert.chart && !currentAlert.chart.label;
+  const noChartLabel = currentAlert?.chart && !currentAlert?.chart.label;
   useEffect(() => {
     // Find source if current alert has one set
     if (noChartLabel) {
@@ -739,7 +748,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
   const loadChartOptions = useMemo(
     () =>
       (input = '', page: number, pageSize: number) => {
-        const query = rison.encode({
+        const query = rison.encode_uri({
           filter: input,
           page,
           page_size: pageSize,
@@ -853,6 +862,8 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
 
   const onContentTypeChange = (event: any) => {
     const { target } = event;
+    // When switch content type, reset force_screenshot to false
+    setForceScreenshot(false);
     // Gives time to close the select before changing the type
     setTimeout(() => setContentType(target.value), 200);
   };
@@ -861,6 +872,10 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
     const { target } = event;
 
     setReportFormat(target.value);
+  };
+
+  const onForceScreenshotChange = (event: any) => {
+    setForceScreenshot(event.target.checked);
   };
 
   // Make sure notification settings has the required info
@@ -882,13 +897,12 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
 
   const validate = () => {
     if (
-      currentAlert &&
-      currentAlert.name?.length &&
-      currentAlert.owners?.length &&
-      currentAlert.crontab?.length &&
-      currentAlert.working_timeout !== undefined &&
-      ((contentType === 'dashboard' && !!currentAlert.dashboard) ||
-        (contentType === 'chart' && !!currentAlert.chart)) &&
+      currentAlert?.name?.length &&
+      currentAlert?.owners?.length &&
+      currentAlert?.crontab?.length &&
+      currentAlert?.working_timeout !== undefined &&
+      ((contentType === 'dashboard' && !!currentAlert?.dashboard) ||
+        (contentType === 'chart' && !!currentAlert?.chart)) &&
       checkNotificationSettings()
     ) {
       if (isReport) {
@@ -915,7 +929,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
       isEditMode &&
       (!currentAlert?.id || alert?.id !== currentAlert.id || (isHidden && show))
     ) {
-      if (alert && alert.id !== null && !loading && !fetchError) {
+      if (alert?.id !== null && !loading && !fetchError) {
         const id = alert.id || 0;
         fetchResource(id);
       }
@@ -967,6 +981,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
       if (resource.chart) {
         setChartVizType((resource.chart as ChartObject).viz_type);
       }
+      setForceScreenshot(resource.force_screenshot);
 
       setCurrentAlert({
         ...resource,
@@ -1080,7 +1095,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
               <span className="required">*</span>
             </div>
             <div data-test="owners-select" className="input-container">
-              <Select
+              <AsyncSelect
                 ariaLabel={t('Owners')}
                 allowClear
                 name="owners"
@@ -1128,7 +1143,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
                   <span className="required">*</span>
                 </div>
                 <div className="input-container">
-                  <Select
+                  <AsyncSelect
                     ariaLabel={t('Database')}
                     name="source"
                     value={
@@ -1177,13 +1192,17 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
                         currentAlert?.validator_config_json?.op || undefined
                       }
                       options={CONDITIONS}
-                      sortComparator={propertyComparator('order')}
                     />
                   </div>
                 </StyledInputContainer>
                 <StyledInputContainer>
                   <div className="control-label">
-                    {t('Value')}
+                    {t('Value')}{' '}
+                    <InfoTooltipWithTrigger
+                      tooltip={t(
+                        'Threshold value should be double precision number',
+                      )}
+                    />
                     <span className="required">*</span>
                   </div>
                   <div className="input-container">
@@ -1192,10 +1211,8 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
                       name="threshold"
                       disabled={conditionNotNull}
                       value={
-                        currentAlert &&
-                        currentAlert.validator_config_json &&
-                        currentAlert.validator_config_json.threshold !==
-                          undefined
+                        currentAlert?.validator_config_json?.threshold !==
+                        undefined
                           ? currentAlert.validator_config_json.threshold
                           : ''
                       }
@@ -1228,6 +1245,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
               <TimezoneSelector
                 onTimezoneChange={onTimezoneChange}
                 timezone={currentAlert?.timezone}
+                minWidth="100%"
               />
             </div>
             <StyledSectionTitle>
@@ -1296,7 +1314,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
               <StyledRadio value="dashboard">{t('Dashboard')}</StyledRadio>
               <StyledRadio value="chart">{t('Chart')}</StyledRadio>
             </Radio.Group>
-            <Select
+            <AsyncSelect
               ariaLabel={t('Chart')}
               css={{
                 display: contentType === 'chart' ? 'inline' : 'none',
@@ -1313,7 +1331,7 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
               options={loadChartOptions}
               onChange={onChartChange}
             />
-            <Select
+            <AsyncSelect
               ariaLabel={t('Dashboard')}
               css={{
                 display: contentType === 'dashboard' ? 'inline' : 'none',
@@ -1331,17 +1349,33 @@ const AlertReportModal: FunctionComponent<AlertReportModalProps> = ({
               onChange={onDashboardChange}
             />
             {formatOptionEnabled && (
+              <>
+                <div className="inline-container">
+                  <StyledRadioGroup
+                    onChange={onFormatChange}
+                    value={reportFormat}
+                  >
+                    <StyledRadio value="PNG">{t('Send as PNG')}</StyledRadio>
+                    <StyledRadio value="CSV">{t('Send as CSV')}</StyledRadio>
+                    {TEXT_BASED_VISUALIZATION_TYPES.includes(chartVizType) && (
+                      <StyledRadio value="TEXT">
+                        {t('Send as text')}
+                      </StyledRadio>
+                    )}
+                  </StyledRadioGroup>
+                </div>
+              </>
+            )}
+            {(isReport || contentType === 'dashboard') && (
               <div className="inline-container">
-                <StyledRadioGroup
-                  onChange={onFormatChange}
-                  value={reportFormat}
+                <StyledCheckbox
+                  data-test="bypass-cache"
+                  className="checkbox"
+                  checked={forceScreenshot}
+                  onChange={onForceScreenshotChange}
                 >
-                  <StyledRadio value="PNG">{t('Send as PNG')}</StyledRadio>
-                  <StyledRadio value="CSV">{t('Send as CSV')}</StyledRadio>
-                  {TEXT_BASED_VISUALIZATION_TYPES.includes(chartVizType) && (
-                    <StyledRadio value="TEXT">{t('Send as text')}</StyledRadio>
-                  )}
-                </StyledRadioGroup>
+                  Ignore cache when generating screenshot
+                </StyledCheckbox>
               </div>
             )}
             <StyledSectionTitle>

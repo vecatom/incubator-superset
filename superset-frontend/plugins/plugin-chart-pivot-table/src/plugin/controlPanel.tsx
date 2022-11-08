@@ -18,6 +18,10 @@
  */
 import React from 'react';
 import {
+  ensureIsArray,
+  hasGenericChartAxes,
+  isAdhocColumn,
+  isPhysicalColumn,
   QueryFormMetric,
   smartDateFormatter,
   t,
@@ -30,27 +34,18 @@ import {
   sections,
   sharedControls,
   emitFilterControl,
-  legacySortBy,
+  Dataset,
+  getStandardizedControls,
 } from '@superset-ui/chart-controls';
 import { MetricsLayoutEnum } from '../types';
 
 const config: ControlPanelConfig = {
   controlPanelSections: [
-    { ...sections.legacyTimeseriesTime, expanded: false },
+    { ...sections.genericTime, expanded: false },
     {
       label: t('Query'),
       expanded: true,
       controlSetRows: [
-        [
-          {
-            name: 'groupbyRows',
-            config: {
-              ...sharedControls.groupby,
-              label: t('Rows'),
-              description: t('Columns to group by on the rows'),
-            },
-          },
-        ],
         [
           {
             name: 'groupbyColumns',
@@ -63,10 +58,54 @@ const config: ControlPanelConfig = {
         ],
         [
           {
+            name: 'groupbyRows',
+            config: {
+              ...sharedControls.groupby,
+              label: t('Rows'),
+              description: t('Columns to group by on the rows'),
+            },
+          },
+        ],
+        [
+          hasGenericChartAxes
+            ? {
+                name: 'time_grain_sqla',
+                config: {
+                  ...sharedControls.time_grain_sqla,
+                  visibility: ({ controls }) => {
+                    const dttmLookup = Object.fromEntries(
+                      ensureIsArray(controls?.groupbyColumns?.options).map(
+                        option => [option.column_name, option.is_dttm],
+                      ),
+                    );
+
+                    return [
+                      ...ensureIsArray(controls?.groupbyColumns.value),
+                      ...ensureIsArray(controls?.groupbyRows.value),
+                    ]
+                      .map(selection => {
+                        if (isAdhocColumn(selection)) {
+                          return true;
+                        }
+                        if (isPhysicalColumn(selection)) {
+                          return !!dttmLookup[selection];
+                        }
+                        return false;
+                      })
+                      .some(Boolean);
+                  },
+                },
+              }
+            : null,
+          hasGenericChartAxes ? 'datetime_columns_lookup' : null,
+        ],
+        [
+          {
             name: 'metrics',
             config: {
               ...sharedControls.metrics,
               validators: [validateNonEmpty],
+              rerender: ['conditional_formatting'],
             },
           },
         ],
@@ -90,15 +129,41 @@ const config: ControlPanelConfig = {
         ],
         ['adhoc_filters'],
         emitFilterControl,
+        ['series_limit'],
         [
           {
             name: 'row_limit',
             config: {
               ...sharedControls.row_limit,
+              label: t('Cell limit'),
+              description: t('Limits the number of cells that get retrieved.'),
             },
           },
         ],
-        ...legacySortBy,
+        // TODO(kgabryje): add series_columns control after control panel is redesigned to avoid clutter
+        [
+          {
+            name: 'series_limit_metric',
+            config: {
+              ...sharedControls.series_limit_metric,
+              description: t(
+                'Metric used to define how the top series are sorted if a series or cell limit is present. ' +
+                  'If undefined reverts to the first metric (where appropriate).',
+              ),
+            },
+          },
+        ],
+        [
+          {
+            name: 'order_desc',
+            config: {
+              type: 'CheckboxControl',
+              label: t('Sort Descending'),
+              default: true,
+              description: t('Whether to sort descending or ascending'),
+            },
+          },
+        ],
       ],
     },
     {
@@ -237,14 +302,14 @@ const config: ControlPanelConfig = {
               ],
               renderTrigger: true,
               description: (
-                <React.Fragment>
+                <>
                   <div>{t('Change order of rows.')}</div>
                   <div>{t('Available sorting modes:')}</div>
                   <ul>
                     <li>{t('By key: use row names as sorting key')}</li>
                     <li>{t('By value: use metric values as sorting key')}</li>
                   </ul>
-                </React.Fragment>
+                </>
               ),
             },
           },
@@ -265,14 +330,14 @@ const config: ControlPanelConfig = {
               ],
               renderTrigger: true,
               description: (
-                <React.Fragment>
+                <>
                   <div>{t('Change order of columns.')}</div>
                   <div>{t('Available sorting modes:')}</div>
                   <ul>
                     <li>{t('By key: use column names as sorting key')}</li>
                     <li>{t('By value: use metric values as sorting key')}</li>
                   </ul>
-                </React.Fragment>
+                </>
               ),
             },
           },
@@ -323,7 +388,11 @@ const config: ControlPanelConfig = {
                 const values =
                   (explore?.controls?.metrics?.value as QueryFormMetric[]) ??
                   [];
-                const verboseMap = explore?.datasource?.verbose_map ?? {};
+                const verboseMap = explore?.datasource?.hasOwnProperty(
+                  'verbose_map',
+                )
+                  ? (explore?.datasource as Dataset)?.verbose_map
+                  : explore?.datasource?.columns ?? {};
                 const metricColumn = values.map(value => {
                   if (typeof value === 'string') {
                     return { value, label: verboseMap[value] ?? value };
@@ -341,6 +410,20 @@ const config: ControlPanelConfig = {
       ],
     },
   ],
+  formDataOverrides: formData => {
+    const groupbyColumns = getStandardizedControls().controls.columns.filter(
+      col => !ensureIsArray(formData.groupbyRows).includes(col),
+    );
+    getStandardizedControls().controls.columns =
+      getStandardizedControls().controls.columns.filter(
+        col => !groupbyColumns.includes(col),
+      );
+    return {
+      ...formData,
+      metrics: getStandardizedControls().popAllMetrics(),
+      groupbyColumns,
+    };
+  },
 };
 
 export default config;

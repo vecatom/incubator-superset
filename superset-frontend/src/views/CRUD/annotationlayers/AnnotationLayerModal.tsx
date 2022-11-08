@@ -29,6 +29,7 @@ import { AnnotationLayerObject } from './types';
 
 interface AnnotationLayerModalProps {
   addDangerToast: (msg: string) => void;
+  addSuccessToast: (msg: string) => void;
   layer?: AnnotationLayerObject | null;
   onLayerAdd?: (layer?: AnnotationLayerObject) => void;
   onHide: () => void;
@@ -80,6 +81,7 @@ const LayerContainer = styled.div`
 
 const AnnotationLayerModal: FunctionComponent<AnnotationLayerModalProps> = ({
   addDangerToast,
+  addSuccessToast,
   onLayerAdd,
   onHide,
   show,
@@ -124,7 +126,7 @@ const AnnotationLayerModal: FunctionComponent<AnnotationLayerModalProps> = ({
   const onSave = () => {
     if (isEditMode) {
       // Edit
-      if (currentLayer && currentLayer.id) {
+      if (currentLayer?.id) {
         const update_id = currentLayer.id;
         delete currentLayer.id;
         delete currentLayer.created_by;
@@ -134,6 +136,7 @@ const AnnotationLayerModal: FunctionComponent<AnnotationLayerModalProps> = ({
           }
 
           hide();
+          addSuccessToast(t('Annotation template updated'));
         });
       }
     } else if (currentLayer) {
@@ -148,6 +151,7 @@ const AnnotationLayerModal: FunctionComponent<AnnotationLayerModalProps> = ({
         }
 
         hide();
+        addSuccessToast(t('Annotation template created'));
       });
     }
   };
@@ -169,7 +173,7 @@ const AnnotationLayerModal: FunctionComponent<AnnotationLayerModalProps> = ({
   };
 
   const validate = () => {
-    if (currentLayer && currentLayer.name?.length) {
+    if (currentLayer?.name?.length) {
       setDisableSave(false);
     } else {
       setDisableSave(true);

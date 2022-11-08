@@ -17,14 +17,15 @@
  * under the License.
  */
 import {
-  t,
-  ChartMetadata,
-  ChartPlugin,
   AnnotationType,
   Behavior,
+  ChartMetadata,
+  ChartPlugin,
+  hasGenericChartAxes,
+  t,
 } from '@superset-ui/core';
 import buildQuery from './buildQuery';
-import controlPanel from './controlPanel';
+import controlPanel from './Regular/Line/controlPanel';
 import transformProps from './transformProps';
 import thumbnail from './images/thumbnail.png';
 import {
@@ -37,28 +38,22 @@ export default class EchartsTimeseriesChartPlugin extends ChartPlugin<
   EchartsTimeseriesFormData,
   EchartsTimeseriesChartProps
 > {
-  /**
-   * The constructor is used to pass relevant metadata and callbacks that get
-   * registered in respective registries that are used throughout the library
-   * and application. A more thorough description of each property is given in
-   * the respective imported file.
-   *
-   * It is worth noting that `buildQuery` and is optional, and only needed for
-   * advanced visualizations that require either post processing operations
-   * (pivoting, rolling aggregations, sorting etc) or submitting multiple queries.
-   */
   constructor() {
     super({
       buildQuery,
       controlPanel,
       loadChart: () => import('./EchartsTimeseries'),
       metadata: new ChartMetadata({
-        behaviors: [Behavior.INTERACTIVE_CHART],
+        behaviors: [Behavior.INTERACTIVE_CHART, Behavior.DRILL_TO_DETAIL],
         category: t('Evolution'),
         credits: ['https://echarts.apache.org'],
-        description: t(
-          'Swiss army knife for visualizing time series data. Choose between  step, line, scatter, and bar charts. This viz type has many customization options as well.',
-        ),
+        description: hasGenericChartAxes
+          ? t(
+              'Swiss army knife for visualizing data. Choose between  step, line, scatter, and bar charts. This viz type has many customization options as well.',
+            )
+          : t(
+              'Swiss army knife for visualizing time series data. Choose between  step, line, scatter, and bar charts. This viz type has many customization options as well.',
+            ),
         exampleGallery: [{ url: example }],
         supportedAnnotationTypes: [
           AnnotationType.Event,
@@ -66,7 +61,7 @@ export default class EchartsTimeseriesChartPlugin extends ChartPlugin<
           AnnotationType.Interval,
           AnnotationType.Timeseries,
         ],
-        name: t('Time-series Chart'),
+        name: hasGenericChartAxes ? t('Generic Chart') : t('Time-series Chart'),
         tags: [
           t('Advanced-Analytics'),
           t('Aesthetic'),

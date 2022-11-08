@@ -19,14 +19,17 @@ import logging
 from datetime import datetime
 from io import BytesIO
 from typing import Any
-from zipfile import ZipFile
+from zipfile import is_zipfile, ZipFile
 
 from flask import g, request, Response, send_file
 from flask_appbuilder.api import expose, protect, rison, safe
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_babel import ngettext
 
-from superset.commands.importers.exceptions import NoValidFilesFoundError
+from superset.commands.importers.exceptions import (
+    IncorrectFormatError,
+    NoValidFilesFoundError,
+)
 from superset.commands.importers.v1.utils import get_contents_from_bundle
 from superset.constants import MODEL_API_RW_METHOD_PERMISSION_MAP, RouteMethod
 from superset.databases.filters import DatabaseFilter
@@ -53,7 +56,11 @@ from superset.queries.saved_queries.schemas import (
     get_export_ids_schema,
     openapi_spec_methods_override,
 )
-from superset.views.base_api import BaseSupersetModelRestApi, statsd_metrics
+from superset.views.base_api import (
+    BaseSupersetModelRestApi,
+    requires_form_data,
+    statsd_metrics,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +84,7 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
     base_filters = [["id", SavedQueryFilter, lambda: []]]
 
     show_columns = [
+        "changed_on_delta_humanized",
         "created_by.first_name",
         "created_by.id",
         "created_by.last_name",
@@ -88,6 +96,7 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
         "schema",
         "sql",
         "sql_tables",
+        "template_parameters",
     ]
     list_columns = [
         "changed_on_delta_humanized",
@@ -108,7 +117,14 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
         "last_run_delta_humanized",
         "extra",
     ]
-    add_columns = ["db_id", "description", "label", "schema", "sql"]
+    add_columns = [
+        "db_id",
+        "description",
+        "label",
+        "schema",
+        "sql",
+        "template_parameters",
+    ]
     edit_columns = add_columns
     order_columns = [
         "schema",
@@ -188,7 +204,7 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
         """
         item_ids = kwargs["rison"]
         try:
-            BulkDeleteSavedQueryCommand(g.user, item_ids).run()
+            BulkDeleteSavedQueryCommand(item_ids).run()
             return self.response(
                 200,
                 message=ngettext(
@@ -272,6 +288,7 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
         action=lambda self, *args, **kwargs: f"{self.__class__.__name__}.import_",
         log_to_statsd=False,
     )
+    @requires_form_data
     def import_(self) -> Response:
         """Import Saved Queries with associated databases
         ---
@@ -288,7 +305,12 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
                       type: string
                       format: binary
                     passwords:
-                      description: JSON map of passwords for each file
+                      description: >-
+                        JSON map of passwords for each featured database in the
+                        ZIP file. If the ZIP includes a database config in the path
+                        `databases/MyDatabase.yaml`, the password should be provided
+                        in the following format:
+                        `{"databases/MyDatabase.yaml": "my_password"}`.
                       type: string
                     overwrite:
                       description: overwrite existing saved queries?
@@ -315,6 +337,8 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
         upload = request.files.get("formData")
         if not upload:
             return self.response_400()
+        if not is_zipfile(upload):
+            raise IncorrectFormatError("Not a ZIP file")
         with ZipFile(upload) as bundle:
             contents = get_contents_from_bundle(bundle)
 

@@ -20,15 +20,17 @@ import React from 'react';
 import { t } from '@superset-ui/core';
 import {
   ControlPanelsContainerProps,
+  ControlSetItem,
   ControlSetRow,
   sharedControls,
 } from '@superset-ui/chart-controls';
-import { DEFAULT_LEGEND_FORM_DATA } from './types';
+import { DEFAULT_LEGEND_FORM_DATA } from './constants';
+import { DEFAULT_FORM_DATA } from './Timeseries/constants';
 
 const { legendMargin, legendOrientation, legendType, showLegend } =
   DEFAULT_LEGEND_FORM_DATA;
 
-const showLegendControl = {
+const showLegendControl: ControlSetItem = {
   name: 'show_legend',
   config: {
     type: 'CheckboxControl',
@@ -39,7 +41,7 @@ const showLegendControl = {
   },
 };
 
-const legendMarginControl = {
+const legendMarginControl: ControlSetItem = {
   name: 'legendMargin',
   config: {
     type: 'TextControl',
@@ -53,15 +55,15 @@ const legendMarginControl = {
   },
 };
 
-const legendTypeControl = {
+const legendTypeControl: ControlSetItem = {
   name: 'legendType',
   config: {
     type: 'SelectControl',
     freeForm: false,
-    label: 'Type',
+    label: t('Type'),
     choices: [
-      ['scroll', 'Scroll'],
-      ['plain', 'Plain'],
+      ['scroll', t('Scroll')],
+      ['plain', t('Plain')],
     ],
     default: legendType,
     renderTrigger: true,
@@ -71,35 +73,35 @@ const legendTypeControl = {
   },
 };
 
-const legendOrientationControl = {
+const legendOrientationControl: ControlSetItem = {
   name: 'legendOrientation',
   config: {
     type: 'SelectControl',
     freeForm: false,
-    label: 'Orientation',
+    label: t('Orientation'),
     choices: [
-      ['top', 'Top'],
-      ['bottom', 'Bottom'],
-      ['left', 'Left'],
-      ['right', 'Right'],
+      ['top', t('Top')],
+      ['bottom', t('Bottom')],
+      ['left', t('Left')],
+      ['right', t('Right')],
     ],
     default: legendOrientation,
     renderTrigger: true,
-    description: t('Legend type'),
+    description: t('Legend Orientation'),
     visibility: ({ controls }: ControlPanelsContainerProps) =>
       Boolean(controls?.show_legend?.value),
   },
 };
 
-export const legendSection = [
-  [<h1 className="section-header">{t('Legend')}</h1>],
+export const legendSection: ControlSetRow[] = [
+  [<div className="section-header">{t('Legend')}</div>],
   [showLegendControl],
   [legendTypeControl],
   [legendOrientationControl],
   [legendMarginControl],
 ];
 
-const showValueControl = {
+export const showValueControl: ControlSetItem = {
   name: 'show_value',
   config: {
     type: 'CheckboxControl',
@@ -110,7 +112,7 @@ const showValueControl = {
   },
 };
 
-const stackControl = {
+export const stackControl: ControlSetItem = {
   name: 'stack',
   config: {
     type: 'CheckboxControl',
@@ -121,7 +123,7 @@ const stackControl = {
   },
 };
 
-const onlyTotalControl = {
+export const onlyTotalControl: ControlSetItem = {
   name: 'only_total',
   config: {
     type: 'CheckboxControl',
@@ -136,13 +138,37 @@ const onlyTotalControl = {
   },
 };
 
-export const showValueSection = [
+const percentageThresholdControl: ControlSetItem = {
+  name: 'percentage_threshold',
+  config: {
+    type: 'TextControl',
+    label: t('Percentage threshold'),
+    renderTrigger: true,
+    isFloat: true,
+    default: DEFAULT_FORM_DATA.percentageThreshold,
+    description: t(
+      'Minimum threshold in percentage points for showing labels.',
+    ),
+    visibility: ({ controls }: ControlPanelsContainerProps) =>
+      Boolean(controls?.show_value?.value) &&
+      Boolean(controls?.stack?.value) &&
+      Boolean(!controls?.only_total?.value),
+  },
+};
+
+export const showValueSection: ControlSetRow[] = [
   [showValueControl],
   [stackControl],
   [onlyTotalControl],
+  [percentageThresholdControl],
 ];
 
-const richTooltipControl = {
+export const showValueSectionWithoutStack: ControlSetRow[] = [
+  [showValueControl],
+  [onlyTotalControl],
+];
+
+const richTooltipControl: ControlSetItem = {
   name: 'rich_tooltip',
   config: {
     type: 'CheckboxControl',
@@ -155,7 +181,7 @@ const richTooltipControl = {
   },
 };
 
-const tooltipTimeFormatControl = {
+const tooltipTimeFormatControl: ControlSetItem = {
   name: 'tooltipTimeFormat',
   config: {
     ...sharedControls.x_axis_time_format,
@@ -165,7 +191,7 @@ const tooltipTimeFormatControl = {
   },
 };
 
-const tooltipSortByMetricControl = {
+const tooltipSortByMetricControl: ControlSetItem = {
   name: 'tooltipSortByMetric',
   config: {
     type: 'CheckboxControl',
@@ -181,7 +207,7 @@ const tooltipSortByMetricControl = {
 };
 
 export const richTooltipSection: ControlSetRow[] = [
-  [<h1 className="section-header">{t('Tooltip')}</h1>],
+  [<div className="section-header">{t('Tooltip')}</div>],
   [richTooltipControl],
   [tooltipSortByMetricControl],
   [tooltipTimeFormatControl],

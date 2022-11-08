@@ -16,48 +16,60 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import omit from 'lodash/omit';
+
 import {
+  AdhocColumn,
   buildQueryContext,
   ensureIsArray,
-  getMetricLabel,
-  normalizeOrderBy,
+  hasGenericChartAxes,
+  isPhysicalColumn,
   QueryFormColumn,
+  QueryFormOrderBy,
 } from '@superset-ui/core';
 import { PivotTableQueryFormData } from '../types';
 
 export default function buildQuery(formData: PivotTableQueryFormData) {
-  const {
-    groupbyColumns = [],
-    groupbyRows = [],
-    order_desc = true,
-    legacy_order_by,
-  } = formData;
+  const { groupbyColumns = [], groupbyRows = [] } = formData;
   // TODO: add deduping of AdhocColumns
-  const groupbySet = new Set([
-    ...ensureIsArray<QueryFormColumn>(groupbyColumns),
-    ...ensureIsArray<QueryFormColumn>(groupbyRows),
-  ]);
-  return buildQueryContext(formData, baseQueryObject => {
-    const queryObject = normalizeOrderBy({
-      ...baseQueryObject,
-      order_desc,
-      legacy_order_by,
-    });
-    const { metrics } = queryObject;
-    const orderBy = ensureIsArray(legacy_order_by);
+  const columns = Array.from(
+    new Set([
+      ...ensureIsArray<QueryFormColumn>(groupbyColumns),
+      ...ensureIsArray<QueryFormColumn>(groupbyRows),
+    ]),
+  ).map(col => {
     if (
-      orderBy.length &&
-      !metrics?.find(
-        metric => getMetricLabel(metric) === getMetricLabel(orderBy[0]),
-      )
+      isPhysicalColumn(col) &&
+      formData.time_grain_sqla &&
+      hasGenericChartAxes &&
+      formData?.datetime_columns_lookup?.[col]
     ) {
-      metrics?.push(orderBy[0]);
+      return {
+        timeGrain: formData.time_grain_sqla,
+        columnType: 'BASE_AXIS',
+        sqlExpression: col,
+        label: col,
+        expressionType: 'SQL',
+      } as AdhocColumn;
+    }
+    return col;
+  });
+
+  return buildQueryContext(formData, baseQueryObject => {
+    const { series_limit_metric, metrics, order_desc } = baseQueryObject;
+    let orderBy: QueryFormOrderBy[] | undefined;
+    if (series_limit_metric) {
+      orderBy = [[series_limit_metric, !order_desc]];
+    } else if (Array.isArray(metrics) && metrics[0]) {
+      orderBy = [[metrics[0], !order_desc]];
     }
     return [
       {
-        ...queryObject,
-        columns: [...groupbySet],
-        metrics,
+        ...(hasGenericChartAxes
+          ? omit(baseQueryObject, ['extras.time_grain_sqla'])
+          : baseQueryObject),
+        orderby: orderBy,
+        columns,
       },
     ];
   });

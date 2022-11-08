@@ -16,18 +16,18 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { useDispatch } from 'react-redux';
 import { setFilterConfiguration } from 'src/dashboard/actions/nativeFilters';
 import Button from 'src/components/Button';
-import { styled } from '@superset-ui/core';
-import { FilterConfiguration } from 'src/dashboard/components/nativeFilters/types';
-import { FiltersConfigModal } from 'src/dashboard/components/nativeFilters/FiltersConfigModal/FiltersConfigModal';
+import { FilterConfiguration, styled } from '@superset-ui/core';
+import FiltersConfigModal from 'src/dashboard/components/nativeFilters/FiltersConfigModal/FiltersConfigModal';
 import { getFilterBarTestId } from '..';
 
 export interface FCBProps {
   createNewOnOpen?: boolean;
   dashboardId?: number;
+  children?: React.ReactNode;
 }
 
 const HeaderButton = styled(Button)`
@@ -42,14 +42,21 @@ export const FilterConfigurationLink: React.FC<FCBProps> = ({
   const dispatch = useDispatch();
   const [isOpen, setOpen] = useState(false);
 
-  function close() {
+  const close = useCallback(() => {
     setOpen(false);
-  }
+  }, [setOpen]);
 
-  async function submit(filterConfig: FilterConfiguration) {
-    dispatch(await setFilterConfiguration(filterConfig));
-    close();
-  }
+  const submit = useCallback(
+    async (filterConfig: FilterConfiguration) => {
+      dispatch(await setFilterConfiguration(filterConfig));
+      close();
+    },
+    [dispatch, close],
+  );
+
+  const handleClick = useCallback(() => {
+    setOpen(true);
+  }, [setOpen]);
 
   return (
     <>
@@ -58,7 +65,7 @@ export const FilterConfigurationLink: React.FC<FCBProps> = ({
         {...getFilterBarTestId('create-filter')}
         buttonStyle="link"
         buttonSize="xsmall"
-        onClick={() => setOpen(true)}
+        onClick={handleClick}
       >
         {children}
       </HeaderButton>
@@ -73,4 +80,4 @@ export const FilterConfigurationLink: React.FC<FCBProps> = ({
   );
 };
 
-export default FilterConfigurationLink;
+export default React.memo(FilterConfigurationLink);
